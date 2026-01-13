@@ -3,10 +3,10 @@
 
 #include "main.h"
 
-/* 声明全局变量，供其他文件访问 */
+// 外部变量声明
 extern volatile long actuator_count;
 
-/* 函数声明 */
+// 重置编码器计数值
 void Encoder_Reset(void);
 
 #endif /* __ENCODER_H */

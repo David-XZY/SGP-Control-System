@@ -26,6 +26,7 @@
 /* USER CODE BEGIN Includes */
 #include "encoder.h"
 #include "bsp_uart.h"
+#include "actuator.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -49,6 +50,10 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
+Actuator_t act1;
+const float PULSE_RATIO = 1700.0f / 50.0f; // 1700脉冲 = 50mm
+float p_kp = 1.2f, p_ki = 0.0f;           // 位置环 PI
+float v_kp = 150.0f, v_ki = 0.0f;          // 速度环 PI
 
 /* USER CODE END PV */
 
@@ -60,6 +65,14 @@ void SystemClock_Config(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+// 重定向 printf 函数到 UART
+int fputc(int ch, FILE *f) {
+    if (__HAL_UART_GET_FLAG(&huart1, UART_FLAG_ORE) != RESET) {
+        __HAL_UART_CLEAR_OREFLAG(&huart1);
+    }
+    HAL_UART_Transmit(&huart1, (uint8_t *)&ch, 1, 10);
+    return ch;
+}
 
 /* USER CODE END 0 */
 
@@ -98,6 +111,16 @@ int main(void)
 	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
 	UART_Init_Receive();
 	printf("System Ready!\r\n");
+	
+	Actuator_Init(&act1, 
+                &htim3, TIM_CHANNEL_2,          // 定时器与通道
+                M_In1_GPIO_Port, M_In1_Pin,     // 15AS 方向引脚1
+                M_In2_GPIO_Port, M_In2_Pin,     // 15AS 方向引脚2
+                &actuator_count,                // 引用 encoder.c 中的计数值
+                p_kp, p_ki,                     // 位置环参数
+                v_kp, v_ki,                     // 速度环参数
+                PULSE_RATIO);                   // 脉冲/mm 比例
+  Actuator_Home(&act1); // 复位到初始位置
 
   /* USER CODE END 2 */
 
@@ -105,8 +128,15 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+		
+		Actuator_Update(&act1);
+		
     if (new_cmd_flag) {
         // 处理收到的指令
+        if (strncmp(rx_buffer, "pos=", 4) == 0) {
+            Actuator_SetTarget(&act1, atof(&rx_buffer[4]));
+            printf("Target set to: %.2f mm\r\n", act1.target_pos_mm);
+        }
         new_cmd_flag = 0; 
     }
     /* USER CODE END WHILE */
