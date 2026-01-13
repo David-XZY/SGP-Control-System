@@ -28,3 +28,6 @@ Backup/
 
 # --- 记录调试数据的 CSV（可选，如果你不想上传测试原始数据） ---
 *.csv
+MDK-ARM/.vscode/uv4.log.lock
+MDK-ARM/.vscode/c_cpp_properties.json
+MDK-ARM/.vscode/keil-assistant.log
