@@ -24,6 +24,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "encoder.h"
+#include "bsp_uart.h"
+#include <string.h>
+#include <stdlib.h>
 
 /* USER CODE END Includes */
 
@@ -91,6 +95,9 @@ int main(void)
   MX_USART1_UART_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
+	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+	UART_Init_Receive();
+	printf("System Ready!\r\n");
 
   /* USER CODE END 2 */
 
@@ -98,6 +105,10 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    if (new_cmd_flag) {
+        // 处理收到的指令
+        new_cmd_flag = 0; 
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

@@ -31,3 +31,7 @@ Backup/
 MDK-ARM/.vscode/uv4.log.lock
 MDK-ARM/.vscode/c_cpp_properties.json
 MDK-ARM/.vscode/keil-assistant.log
+MDK-ARM/startup_stm32f407xx.lst
+MDK-ARM/.vscode/uv4.log
+MDK-ARM/SGP_Control_System/SGP_Control_System.hex
+.vscode/c_cpp_properties.json
