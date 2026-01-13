@@ -1,0 +1,30 @@
+# --- Keil MDK 编译输出 ---
+Objects/
+Listings/
+*.txt
+*.htm
+*.dep
+*.build_log.htm
+*.axf
+*.lnp
+*.sct
+*.map
+*.d
+*.o
+*.crf
+*.i
+
+# --- Keil 用户私有配置 ---
+*.uvguix.*
+*.uvgui.*
+*.bak
+JLinkLog.txt
+*.scvd
+
+# --- STM32CubeMX 临时文件 ---
+.mxproject
+*.tmp
+Backup/
+
+# --- 记录调试数据的 CSV（可选，如果你不想上传测试原始数据） ---
+*.csv
