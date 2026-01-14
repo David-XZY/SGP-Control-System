@@ -3,10 +3,18 @@
 
 #include "main.h"
 
-// 外部变量声明
-extern volatile long actuator_count;
+#define ACTUATOR_NUM 6
 
-// 重置编码器计数值
-void Encoder_Reset(void);
+// 1. 初始化 6 路硬件编码器接口
+void Encoders_Init(void);
 
-#endif /* __ENCODER_H */
+// 2. 获取原始脉冲计数 (int16_t 处理过零翻转)
+int16_t Encoder_GetRawCount(uint8_t axis_idx);
+
+// 3. 获取物理位置 (mm)
+float Encoder_GetPos_mm(uint8_t axis_idx);
+
+// 4. 重置特定轴的零点
+void Encoder_ResetPos(uint8_t axis_idx);
+
+#endif

@@ -50,10 +50,8 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-Actuator_t act1;
-const float PULSE_RATIO = 1700.0f / 50.0f; // 1700脉冲 = 50mm
-float p_kp = 1.2f, p_ki = 0.0f;           // 位置环 PI
-float v_kp = 150.0f, v_ki = 0.0f;          // 速度环 PI
+Actuator_t acts[6]; // 全局执行器数组
+uint32_t last_print_tick = 0;
 
 /* USER CODE END PV */
 
@@ -107,20 +105,26 @@ int main(void)
   MX_GPIO_Init();
   MX_USART1_UART_Init();
   MX_TIM3_Init();
+  MX_TIM1_Init();
+  MX_TIM2_Init();
+  MX_TIM4_Init();
+  MX_TIM5_Init();
+  MX_TIM6_Init();
+  MX_TIM8_Init();
+  MX_TIM9_Init();
+  MX_TIM10_Init();
+  MX_TIM11_Init();
+  MX_TIM12_Init();
   /* USER CODE BEGIN 2 */
-	HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_2);
+  Encoders_Init();
 	UART_Init_Receive();
-	printf("System Ready!\r\n");
+	Actuator_Init(&acts[0], &htim9, TIM_CHANNEL_1, M_In1_GPIO_Port, M_In1_Pin, M_In2_GPIO_Port, M_In2_Pin);
 	
-	Actuator_Init(&act1, 
-                &htim3, TIM_CHANNEL_2,          // 定时器与通道
-                M_In1_GPIO_Port, M_In1_Pin,     // 15AS 方向引脚1
-                M_In2_GPIO_Port, M_In2_Pin,     // 15AS 方向引脚2
-                &actuator_count,                // 引用 encoder.c 中的计数值
-                p_kp, p_ki,                     // 位置环参数
-                v_kp, v_ki,                     // 速度环参数
-                PULSE_RATIO);                   // 脉冲/mm 比例
-  Actuator_Home(&act1); // 复位到初始位置
+	HAL_TIM_PWM_Start(&htim9, TIM_CHANNEL_1);
+
+  Actuator_ManualHome(&acts[0], 0);
+
+  HAL_TIM_Base_Start_IT(&htim6);
 
   /* USER CODE END 2 */
 
@@ -128,17 +132,20 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-		
-		Actuator_Update(&act1);
-		
-    if (new_cmd_flag) {
-        // 处理收到的指令
-        if (strncmp(rx_buffer, "pos=", 4) == 0) {
-            Actuator_SetTarget(&act1, atof(&rx_buffer[4]));
-            printf("Target set to: %.2f mm\r\n", act1.target_pos_mm);
-        }
-        new_cmd_flag = 0; 
+		UART_ProcessCommand();
+
+    if (new_cmd_flag == 0) { // 处理完指令后同步一次
+        acts[0].target_pos = target_pos_all[0];
     }
+
+		if (HAL_GetTick() - last_print_tick >= 500) 
+        {
+            last_print_tick = HAL_GetTick();
+            // 打印 Axis 1 的闭环状态供测试
+            printf("A1| Tar:%.1f | Cur:%.1f mm | Vel:%.1f mm/s\r\n", 
+                   acts[0].target_pos, acts[0].current_pos, acts[0].current_vel);
+        }
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -192,6 +199,17 @@ void SystemClock_Config(void)
 }
 
 /* USER CODE BEGIN 4 */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
+    if (htim->Instance == TIM6) {
+        for (int i = 0; i < 6; i++) {
+            // 1. 跨模块调用：直接获取编码器层的物理位置 (mm)
+            float current_mm = Encoder_GetPos_mm(i);
+            
+            // 2. 执行串级 PID 与 PWM 映射
+            Actuator_ControlLoop(&acts[i], current_mm);
+        }
+    }
+}
 
 /* USER CODE END 4 */
 

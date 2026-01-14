@@ -1,33 +1,41 @@
 #include "encoder.h"
+#include "tim.h"
 
-// 全局变量定义
-volatile long actuator_count = 0;
-static uint8_t encode_state = 0;
+// 每根杆子的脉冲/毫米比例数组
+// 1700脉冲 = 50mm -> 34.0
+static const float PULSE_RATIO[ACTUATOR_NUM] = {
+    33.8f, 1700.0f/50.0f, 1700.0f/50.0f, 
+    1700.0f/50.0f, 1700.0f/50.0f, 1700.0f/50.0f
+};
 
-// 重置编码器计数值
-void Encoder_Reset(void) {
-    actuator_count = 0;
+// 硬件定时器映射数组
+static TIM_HandleTypeDef* const ENCODER_TIMS[ACTUATOR_NUM] = {
+    &htim1, &htim2, &htim3, &htim4, &htim5, &htim8
+};
+
+void Encoders_Init(void) {
+    for(int i = 0; i < ACTUATOR_NUM; i++) {
+        // 开启硬件编码器接口
+        HAL_TIM_Encoder_Start(ENCODER_TIMS[i], TIM_CHANNEL_ALL);
+    }
 }
 
-// 外部中断回调函数
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
-    if (GPIO_Pin == Hall_A_Pin || GPIO_Pin == Hall_B_Pin) {
-        uint8_t current_A = (HAL_GPIO_ReadPin(Hall_A_GPIO_Port, Hall_A_Pin) == GPIO_PIN_SET) ? 1 : 0;
-        uint8_t current_B = (HAL_GPIO_ReadPin(Hall_B_GPIO_Port, Hall_B_Pin) == GPIO_PIN_SET) ? 1 : 0;
-        
-        uint8_t new_state = (current_A << 1) | current_B;
-        uint8_t state_trans = (encode_state << 2) | new_state;
-        
-        switch (state_trans) {
-            case 0x1: case 0x7: case 0xE: case 0x8: 
-                actuator_count--; 
-                break;
-            case 0x2: case 0xB: case 0xD: case 0x4: 
-                actuator_count++; 
-                break;
-            default: 
-                break;
-        }
-        encode_state = new_state;
+int16_t Encoder_GetRawCount(uint8_t axis_idx) {
+    if (axis_idx >= ACTUATOR_NUM) return 0;
+    
+    // 读取 CNT 寄存器并强制转换为 int16_t 以处理 0/65535 翻转
+    return (int16_t)__HAL_TIM_GET_COUNTER(ENCODER_TIMS[axis_idx]);
+}
+
+float Encoder_GetPos_mm(uint8_t axis_idx) {
+    if (axis_idx >= ACTUATOR_NUM) return 0.0f;
+    
+    // 直接基于原始脉冲和对应比例计算物理量
+    return (float)Encoder_GetRawCount(axis_idx) / PULSE_RATIO[axis_idx];
+}
+
+void Encoder_ResetPos(uint8_t axis_idx) {
+    if (axis_idx < ACTUATOR_NUM) {
+        __HAL_TIM_SET_COUNTER(ENCODER_TIMS[axis_idx], 0);
     }
 }
