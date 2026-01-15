@@ -29,6 +29,7 @@
 #include "actuator.h"
 #include <string.h>
 #include <stdlib.h>
+#include <main.h>
 
 /* USER CODE END Includes */
 
@@ -52,6 +53,7 @@
 /* USER CODE BEGIN PV */
 Actuator_t acts[6]; // 全局执行器数组
 uint32_t last_print_tick = 0;
+uint32_t timenow = 0;
 
 /* USER CODE END PV */
 
@@ -125,27 +127,49 @@ int main(void)
   Actuator_ManualHome(&acts[0], 0);
 
   HAL_TIM_Base_Start_IT(&htim6);
-
+  timenow = HAL_GetTick();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-		UART_ProcessCommand();
+		// UART_ProcessCommand();
 
-    if (new_cmd_flag == 0) { // 处理完指令后同步一次
-        acts[0].target_pos = target_pos_all[0];
-    }
+    // if (new_cmd_flag == 0) { // 处理完指令后同步一次
+    //     acts[0].target_pos = target_pos_all[0];
+    // }
 
-		if (HAL_GetTick() - last_print_tick >= 500) 
-        {
-            last_print_tick = HAL_GetTick();
-            // 打印 Axis 1 的闭环状态供测试
-            printf("A1| Tar:%.1f | Cur:%.1f mm | Vel:%.1f mm/s\r\n", 
-                   acts[0].target_pos, acts[0].current_pos, acts[0].current_vel);
-        }
+		// if (HAL_GetTick() - last_print_tick >= 500) 
+    //     {
+    //         last_print_tick = HAL_GetTick();
+    //         // 打印 Axis 1 的闭环状态供测试
+    //         printf("A1| Tar:%.1f | Cur:%.1f mm | Vel:%.1f mm/s\r\n", 
+    //                acts[0].target_pos, acts[0].current_pos, acts[0].current_vel);
+    //     }
+    // if (HAL_GPIO_ReadPin(KEY0_GPIO_Port, KEY0_Pin) == GPIO_PIN_RESET) 
+    //     {
+    //         // 伸出
+    //         HAL_GPIO_WritePin(M_In1_GPIO_Port, M_In1_Pin, GPIO_PIN_RESET);
+    //         HAL_GPIO_WritePin(M_In2_GPIO_Port, M_In2_Pin, GPIO_PIN_SET);
+    //         __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_1, 3000); 
+    //     }
+    //     else if (HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin) == GPIO_PIN_RESET)
+    //     {
+    //         // 缩回
+    //         HAL_GPIO_WritePin(M_In1_GPIO_Port, M_In1_Pin, GPIO_PIN_SET);
+    //         HAL_GPIO_WritePin(M_In2_GPIO_Port, M_In2_Pin, GPIO_PIN_RESET);
+    //         __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_1, 3000);
+    //     }
+    //     else 
+    //     {
+    //         // 停止
+    //         __HAL_TIM_SET_COMPARE(&htim9, TIM_CHANNEL_1, 0);
+    //         HAL_GPIO_WritePin(M_In1_GPIO_Port, M_In1_Pin, GPIO_PIN_RESET);
+    //         HAL_GPIO_WritePin(M_In2_GPIO_Port, M_In2_Pin, GPIO_PIN_RESET);
+    //     }
 
+        printf("Target,Current:%d,%6.2f,%6.2f,%6.2f,%6.2f\n", HAL_GetTick(), acts[0].target_pos, acts[0].current_pos, acts[0].target_vel, acts[0].current_vel);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -201,13 +225,20 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
     if (htim->Instance == TIM6) {
-        for (int i = 0; i < 6; i++) {
-            // 1. 跨模块调用：直接获取编码器层的物理位置 (mm)
-            float current_mm = Encoder_GetPos_mm(i);
-            
-            // 2. 执行串级 PID 与 PWM 映射
-            Actuator_ControlLoop(&acts[i], current_mm);
-        }
+        // 获取反馈
+        float current_mm = Encoder_GetPos_mm(0);
+        
+        // 1. 先更新状态
+        Actuator_UpdateStatus(&acts[0], current_mm);
+
+        //test
+        acts[0].target_pos = 30.0f;
+        
+        // 2. 跑位置环（如果只测速度，可以注释掉这一行，手动给 acts[0].target_vel 赋值）
+        Actuator_PositionControl(&acts[0]);
+        
+        // 3. 跑速度环
+        Actuator_VelocityControl(&acts[0]);
     }
 }
 

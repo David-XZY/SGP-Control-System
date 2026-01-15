@@ -1,4 +1,5 @@
 #include "bsp_uart.h"
+#include "Actuator.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -38,22 +39,32 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 void UART_ProcessCommand(void) {
     if (!new_cmd_flag) return;
 
-    if (strncmp(rx_buffer, "all=", 4) == 0) {
-        // 解析 6 轴数据
-        sscanf(rx_buffer + 4, "%f,%f,%f,%f,%f,%f", 
-               &target_pos_all[0], &target_pos_all[1], &target_pos_all[2],
-               &target_pos_all[3], &target_pos_all[4], &target_pos_all[5]);
-    } 
-    else if (rx_buffer[1] == '=') {
-        // 解析单轴数据，例如 "1=20.0"
-        int id = rx_buffer[0] - '1'; // 转换 1-6 为 0-5
-        if (id >= 0 && id < 6) {
-            target_pos_all[id] = atof(rx_buffer + 2);
-        }
+    // if (strncmp(rx_buffer, "all=", 4) == 0) {
+    //     // 解析 6 轴数据
+    //     sscanf(rx_buffer + 4, "%f,%f,%f,%f,%f,%f", 
+    //            &target_pos_all[0], &target_pos_all[1], &target_pos_all[2],
+    //            &target_pos_all[3], &target_pos_all[4], &target_pos_all[5]);
+    // } 
+    // else if (rx_buffer[1] == '=') {
+    //     // 解析单轴数据，例如 "1=20.0"
+    //     int id = rx_buffer[0] - '1'; // 转换 1-6 为 0-5
+    //     if (id >= 0 && id < 6) {
+    //         target_pos_all[id] = atof(rx_buffer + 2);
+    //     }
+    // }
+
+    if (strncmp(rx_buffer, "kp=", 3) == 0) {
+        float kp_val = atof(rx_buffer + 3);
+        acts[0].kp_vel = kp_val;
+        printf("Updated kp_vel: %.2f\r\n", acts[0].kp_vel);
+    } else if (strncmp(rx_buffer, "ki=", 3) == 0) {
+        float ki_val = atof(rx_buffer + 3);
+        acts[0].ki_vel = ki_val;
+        printf("Updated ki_vel: %.2f\r\n", acts[0].ki_vel);
     }
 
     new_cmd_flag = 0; // 处理完毕，清除标志
-    printf("Target Updated: %.1f, %.1f, %.1f, %.1f, %.1f, %.1f\r\n",
-           target_pos_all[0], target_pos_all[1], target_pos_all[2],
-           target_pos_all[3], target_pos_all[4], target_pos_all[5]);
+    // printf("Target Updated: %.1f, %.1f, %.1f, %.1f, %.1f, %.1f\r\n",
+    //        target_pos_all[0], target_pos_all[1], target_pos_all[2],
+    //        target_pos_all[3], target_pos_all[4], target_pos_all[5]);
 }
