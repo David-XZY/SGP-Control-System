@@ -25,6 +25,9 @@ static int parse_six_floats(const char *s, float out[6]) {
 /* 执行 TEST 命令 */
 static void handle_test_command(uint8_t axis, uint8_t test_mode, uint16_t pwm, int32_t stop_count) {
     int16_t cnt;
+    uint8_t dir_in1;
+    uint8_t dir_in2;
+    const char *mode_name;
 
     if (axis >= 6u) {
         printf("ERR,TEST_AXIS\r\n");
@@ -50,17 +53,28 @@ static void handle_test_command(uint8_t axis, uint8_t test_mode, uint16_t pwm, i
         return;
     }
 
-    if (test_mode != 1u) {
+    if ((test_mode != 1u) && (test_mode != 2u)) {
         printf("ERR,TEST_MODE\r\n");
         return;
+    }
+
+    if (test_mode == 1u) {
+        /* 伸长方向：IN1=1, IN2=0 */
+        dir_in1 = 1u;
+        dir_in2 = 0u;
+        mode_name = "EXT";
+    } else {
+        /* 缩回方向：IN1=0, IN2=1 */
+        dir_in1 = 0u;
+        dir_in2 = 1u;
+        mode_name = "RET";
     }
 
     ControlMgr_EnterManualTest();
     ControlMgr_ManualBrakeAll();
 
-    /* 伸长方向：IN1=1, IN2=0 */
-    ControlMgr_ManualSetAxisOutput(axis, 1u, 0u, pwm);
-    printf("ACK,TEST,EXT,axis=%u,pwm=%u,target=%ld\r\n", (unsigned)axis, (unsigned)pwm, (long)stop_count);
+    ControlMgr_ManualSetAxisOutput(axis, dir_in1, dir_in2, pwm);
+    printf("ACK,TEST,%s,axis=%u,pwm=%u,target=%ld\r\n", mode_name, (unsigned)axis, (unsigned)pwm, (long)stop_count);
 
     if (stop_count == 0) {
         /* 清掉当前命令标志，允许后续新命令打断该循环 */
@@ -80,7 +94,7 @@ static void handle_test_command(uint8_t axis, uint8_t test_mode, uint16_t pwm, i
             }
 
             /* 周期重发手动输出，保证占空比保持 */
-            ControlMgr_ManualSetAxisOutput(axis, 1u, 0u, pwm);
+            ControlMgr_ManualSetAxisOutput(axis, dir_in1, dir_in2, pwm);
             HAL_Delay(100);
         }
 
@@ -105,7 +119,7 @@ static void handle_test_command(uint8_t axis, uint8_t test_mode, uint16_t pwm, i
             break;
         }
 
-        ControlMgr_ManualSetAxisOutput(axis, 1u, 0u, pwm);
+        ControlMgr_ManualSetAxisOutput(axis, dir_in1, dir_in2, pwm);
         HAL_Delay(5);
     }
 
