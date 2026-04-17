@@ -14,6 +14,8 @@ typedef enum {
     SYS_RUN_CLOSED_LOOP,   /* 闭环运行 */
     SYS_HOMING,            /* 并行回零 */
     SYS_MANUAL_TEST,       /* 手动测试输出 */
+    SYS_TUNE_VEL,          /* 单轴速度环调参 */
+    SYS_TUNE_POS,          /* 单轴位置环调参 */
     SYS_ESTOP_LATCHED,     /* 急停锁存 */
     SYS_FAULT              /* 故障 */
 } SystemMode_e;
@@ -115,6 +117,10 @@ void ControlMgr_EnterManualTest(void);
 void ControlMgr_ExitManualTest(void);
 void ControlMgr_ManualSetAxisOutput(uint8_t axis, uint8_t in1, uint8_t in2, uint16_t pwm);
 void ControlMgr_ManualBrakeAll(void);
+void ControlMgr_StartTuneVel(uint8_t axis, float target_vel);
+void ControlMgr_StartTunePos(uint8_t axis, float target_pos);
+void ControlMgr_StopTune(void);
+uint8_t ControlMgr_GetTuneAxis(void);
 
 /**
  * @brief 获取当前系统模式

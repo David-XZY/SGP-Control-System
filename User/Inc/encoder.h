@@ -26,6 +26,7 @@ int16_t Encoder_GetRawCount(uint8_t axis_idx);
  * @return float 位置值（非法轴号返回 0.0）
  */
 float Encoder_GetPos_mm(uint8_t axis_idx);
+float Encoder_PosMmToCount(uint8_t axis_idx, float pos_mm);
 
 /**
  * @brief 清零指定轴编码器计数

@@ -29,11 +29,11 @@ void Actuator_Init(Actuator_t *act, TIM_HandleTypeDef *htim, uint32_t ch,
     }
     act->vel_idx = 0;
 
-    act->kp_pos = 6.5f;
-    act->kp_vel = 100.0f;
-    act->ki_vel = 18.0f;
-    act->kd_vel = 5.0f;
-    act->vel_limit = 22.0f;
+    act->kp_pos = 0.0f;
+    act->kp_vel = 0.0f;
+    act->ki_vel = 0.0f;
+    act->kd_vel = 0.0f;
+    act->vel_limit = 0.0f;
     act->integral_vel = 0.0f;
     act->last_vel_error = 0.0f;
     act->d_term_filt = 0.0f;
@@ -155,7 +155,7 @@ void Actuator_ManualHome(Actuator_t *act, uint8_t axis_idx) {
 
     printf("Axis %d Homing start...\r\n", axis_idx + 1u);
 
-    Actuator_WriteOutput(act, 0u, 1u, 2200u);
+    Actuator_WriteOutput(act, 0u, 1u, 3500u);
 
     while (1) {
         int16_t current_pulse = Encoder_GetRawCount(axis_idx);

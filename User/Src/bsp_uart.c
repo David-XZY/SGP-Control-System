@@ -4,6 +4,7 @@
 #include "encoder.h"
 #include "safety_manager.h"
 #include "tim.h"
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,12 +18,117 @@ static uint8_t rx_index = 0u;
 /* 新命令就绪标志 */
 volatile uint8_t new_cmd_flag = 0u;
 
+typedef enum {
+    FW_MODE_OFF = 0,
+    FW_MODE_VEL,
+    FW_MODE_POS
+} FireWaterMode_e;
+
+static FireWaterMode_e g_fw_mode = FW_MODE_OFF;
+static uint32_t g_fw_last_tick = 0u;
+static uint16_t g_fw_period_ms = 100u;
+static uint8_t g_fw_axis = 0u;
+static bool g_fw_header_pending = false;
+
 /* 解析 6 个逗号分隔浮点数，成功返回 6 */
 static int parse_six_floats(const char *s, float out[6]) {
     return sscanf(s, "%f,%f,%f,%f,%f,%f", &out[0], &out[1], &out[2], &out[3], &out[4], &out[5]);
 }
 
-/* 执行 TEST 命令 */
+/* 打印单轴当前 PID 参数 */
+static void print_axis_pid(uint8_t axis) {
+    printf("PIDCFG,axis=%u,kp_pos=%.4f,kp_vel=%.4f,ki_vel=%.4f,kd_vel=%.4f,vel_limit=%.4f\r\n", (unsigned)(axis + 1u),
+           acts[axis].kp_pos, acts[axis].kp_vel, acts[axis].ki_vel, acts[axis].kd_vel, acts[axis].vel_limit);
+}
+
+/* 参数改动后重置速度环内部状态 */
+static void reset_axis_pid_state(uint8_t axis) {
+    acts[axis].integral_vel = 0.0f;
+    acts[axis].last_vel_error = 0.0f;
+    acts[axis].d_term_filt = 0.0f;
+}
+
+/* 启用 FireWater 连续输出 */
+static void fw_enable(FireWaterMode_e mode, uint16_t period_ms) {
+    g_fw_mode = mode;
+    g_fw_period_ms = (period_ms < 10u) ? 10u : period_ms;
+    g_fw_last_tick = 0u;
+    g_fw_header_pending = true;
+}
+
+/* 关闭 FireWater 连续输出 */
+static void fw_disable(void) {
+    g_fw_mode = FW_MODE_OFF;
+    g_fw_header_pending = false;
+}
+
+/* 按配置周期输出 FireWater 数据 */
+static void fw_stream_tick(void) {
+    uint32_t now;
+    SystemMode_e mode;
+    uint8_t axis;
+
+    if (g_fw_mode == FW_MODE_OFF) {
+        return;
+    }
+
+    mode = ControlMgr_GetMode();
+    if (((g_fw_mode == FW_MODE_VEL) && (mode != SYS_TUNE_VEL)) || ((g_fw_mode == FW_MODE_POS) && (mode != SYS_TUNE_POS))) {
+        return;
+    }
+
+    axis = g_fw_axis;
+    if (axis >= 6u) {
+        return;
+    }
+
+    now = HAL_GetTick();
+    if ((g_fw_last_tick != 0u) && ((now - g_fw_last_tick) < g_fw_period_ms)) {
+        return;
+    }
+    g_fw_last_tick = now;
+
+    if (g_fw_header_pending) {
+        if (g_fw_mode == FW_MODE_VEL) {
+            printf("target_cnt,actual_cnt,target_vel,actual_vel\r\n");
+        } else {
+            printf("target_vel,actual_vel,target_pos,actual_pos\r\n");
+        }
+        g_fw_header_pending = false;
+    }
+
+    if (g_fw_mode == FW_MODE_VEL) {
+        float target_cnt = Encoder_PosMmToCount(axis, acts[axis].target_pos);
+        int16_t actual_cnt = Encoder_GetRawCount(axis);
+        printf("%.3f,%d,%.3f,%.3f\r\n", target_cnt, (int)actual_cnt, acts[axis].target_vel, acts[axis].current_vel);
+    } else {
+        printf("%.3f,%.3f,%.3f,%.3f\r\n", acts[axis].target_vel, acts[axis].current_vel, acts[axis].target_pos,
+               acts[axis].current_pos);
+    }
+}
+
+/* 执行旧流程阻塞回零（单轴） */
+static void handle_old_home(uint8_t axis) {
+    if (axis >= 6u) {
+        printf("ERR,HOME_OLD_AXIS\r\n");
+        return;
+    }
+
+    ControlMgr_StopTune();
+
+    printf("ACK,HOME_OLD,axis=%u\r\n", (unsigned)(axis + 1u));
+
+    /* 阻塞回零前停掉周期中断，避免控制管理器覆盖输出 */
+    HAL_TIM_Base_Stop_IT(&htim6);
+    Actuator_ManualHome(&acts[axis], axis);
+    Encoder_ResetPos(axis);
+    HAL_TIM_Base_Start_IT(&htim6);
+
+    ControlMgr_SetIdleMode();
+    printf("HOME_OLD_DONE,axis=%u,cnt=%d\r\n", (unsigned)(axis + 1u), (int)Encoder_GetRawCount(axis));
+}
+
+/* 执行 TEST 命令（保留兼容） */
 static void handle_test_command(uint8_t axis, uint8_t test_mode, uint16_t pwm, int32_t stop_count) {
     int16_t cnt;
     uint8_t dir_in1;
@@ -41,7 +147,6 @@ static void handle_test_command(uint8_t axis, uint8_t test_mode, uint16_t pwm, i
     if (test_mode == 0u) {
         printf("ACK,TEST,HOME,axis=%u\r\n", (unsigned)axis);
 
-        /* 阻塞回零前停掉周期中断，避免控制管理器覆盖输出 */
         HAL_TIM_Base_Stop_IT(&htim6);
         Actuator_ManualHome(&acts[axis], axis);
         Encoder_ResetPos(axis);
@@ -59,12 +164,10 @@ static void handle_test_command(uint8_t axis, uint8_t test_mode, uint16_t pwm, i
     }
 
     if (test_mode == 1u) {
-        /* 伸长方向：IN1=1, IN2=0 */
         dir_in1 = 1u;
         dir_in2 = 0u;
         mode_name = "EXT";
     } else {
-        /* 缩回方向：IN1=0, IN2=1 */
         dir_in1 = 0u;
         dir_in2 = 1u;
         mode_name = "RET";
@@ -77,7 +180,6 @@ static void handle_test_command(uint8_t axis, uint8_t test_mode, uint16_t pwm, i
     printf("ACK,TEST,%s,axis=%u,pwm=%u,target=%ld\r\n", mode_name, (unsigned)axis, (unsigned)pwm, (long)stop_count);
 
     if (stop_count == 0) {
-        /* 清掉当前命令标志，允许后续新命令打断该循环 */
         new_cmd_flag = 0u;
         while (1) {
             if (ControlMgr_IsEstopLatched()) {
@@ -88,12 +190,10 @@ static void handle_test_command(uint8_t axis, uint8_t test_mode, uint16_t pwm, i
             cnt = Encoder_GetRawCount(axis);
             printf("TEST,axis=%u,cnt=%d\r\n", (unsigned)axis, (int)cnt);
 
-            /* 持续打印模式下，收到新命令则退出，让主循环处理新命令 */
             if (new_cmd_flag) {
                 break;
             }
 
-            /* 周期重发手动输出，保证占空比保持 */
             ControlMgr_ManualSetAxisOutput(axis, dir_in1, dir_in2, pwm);
             HAL_Delay(100);
         }
@@ -155,11 +255,12 @@ void UART_ProcessCommand(void) {
     char cmd[96];
     float v[6];
 
+    fw_stream_tick();
+
     if (!new_cmd_flag) {
         return;
     }
 
-    /* 先取走当前命令并清标志，避免长处理过程覆盖后续新命令 */
     strncpy(cmd, rx_buffer, sizeof(cmd) - 1u);
     cmd[sizeof(cmd) - 1u] = '\0';
     new_cmd_flag = 0u;
@@ -176,6 +277,13 @@ void UART_ProcessCommand(void) {
     } else if (strcmp(cmd, "ABORT_HOME") == 0) {
         ControlMgr_AbortHoming();
         printf("ACK,ABORT_HOME\r\n");
+    } else if (strncmp(cmd, "HOME_OLD,", 9) == 0) {
+        unsigned int axis;
+        if (sscanf(cmd + 9, "%u", &axis) == 1 && axis >= 1u && axis <= 6u) {
+            handle_old_home((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,HOME_OLD\r\n");
+        }
     } else if (strcmp(cmd, "ESTOP") == 0) {
         Safety_ForceEstopLatch();
         printf("ACK,ESTOP\r\n");
@@ -205,12 +313,120 @@ void UART_ProcessCommand(void) {
             if ((axis >= 1u) && (axis <= 6u)) {
                 ControlMgr_SetPidAxis((uint8_t)(axis - 1u), kp_pos, kp_vel, ki_vel, kd_vel, vel_lim);
                 printf("ACK,PID,%u\r\n", axis);
+                print_axis_pid((uint8_t)(axis - 1u));
             } else {
                 printf("ERR,PID_AXIS\r\n");
             }
         } else {
             printf("ERR,PID\r\n");
         }
+    } else if (strncmp(cmd, "KPP,", 4) == 0) {
+        unsigned int axis;
+        float value;
+        if (sscanf(cmd + 4, "%u,%f", &axis, &value) == 2 && axis >= 1u && axis <= 6u) {
+            acts[axis - 1u].kp_pos = value;
+            reset_axis_pid_state((uint8_t)(axis - 1u));
+            print_axis_pid((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,KPP\r\n");
+        }
+    } else if (strncmp(cmd, "KPV,", 4) == 0) {
+        unsigned int axis;
+        float value;
+        if (sscanf(cmd + 4, "%u,%f", &axis, &value) == 2 && axis >= 1u && axis <= 6u) {
+            acts[axis - 1u].kp_vel = value;
+            reset_axis_pid_state((uint8_t)(axis - 1u));
+            print_axis_pid((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,KPV\r\n");
+        }
+    } else if (strncmp(cmd, "KIV,", 4) == 0) {
+        unsigned int axis;
+        float value;
+        if (sscanf(cmd + 4, "%u,%f", &axis, &value) == 2 && axis >= 1u && axis <= 6u) {
+            acts[axis - 1u].ki_vel = value;
+            reset_axis_pid_state((uint8_t)(axis - 1u));
+            print_axis_pid((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,KIV\r\n");
+        }
+    } else if (strncmp(cmd, "KDV,", 4) == 0) {
+        unsigned int axis;
+        float value;
+        if (sscanf(cmd + 4, "%u,%f", &axis, &value) == 2 && axis >= 1u && axis <= 6u) {
+            acts[axis - 1u].kd_vel = value;
+            reset_axis_pid_state((uint8_t)(axis - 1u));
+            print_axis_pid((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,KDV\r\n");
+        }
+    } else if (strncmp(cmd, "VLIM,", 5) == 0) {
+        unsigned int axis;
+        float value;
+        if (sscanf(cmd + 5, "%u,%f", &axis, &value) == 2 && axis >= 1u && axis <= 6u) {
+            acts[axis - 1u].vel_limit = value;
+            print_axis_pid((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,VLIM\r\n");
+        }
+    } else if (strncmp(cmd, "SHOWPID,", 8) == 0) {
+        unsigned int axis;
+        if (sscanf(cmd + 8, "%u", &axis) == 1 && axis >= 1u && axis <= 6u) {
+            print_axis_pid((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,SHOWPID\r\n");
+        }
+    } else if (strncmp(cmd, "TUNEVEL,", 8) == 0) {
+        unsigned int axis;
+        float target_vel;
+        if (sscanf(cmd + 8, "%u,%f", &axis, &target_vel) == 2 && axis >= 1u && axis <= 6u) {
+            ControlMgr_StartTuneVel((uint8_t)(axis - 1u), target_vel);
+            g_fw_axis = (uint8_t)(axis - 1u);
+            if (g_fw_mode == FW_MODE_VEL) {
+                g_fw_header_pending = true;
+                g_fw_last_tick = 0u;
+            }
+            printf("ACK,TUNEVEL,axis=%u,target_vel=%.3f\r\n", axis, target_vel);
+        } else {
+            printf("ERR,TUNEVEL\r\n");
+        }
+    } else if (strncmp(cmd, "TUNEPOS,", 8) == 0) {
+        unsigned int axis;
+        float target_pos;
+        if (sscanf(cmd + 8, "%u,%f", &axis, &target_pos) == 2 && axis >= 1u && axis <= 6u &&
+            target_pos >= 0.0f && target_pos <= 300.0f) {
+            ControlMgr_StartTunePos((uint8_t)(axis - 1u), target_pos);
+            g_fw_axis = (uint8_t)(axis - 1u);
+            if (g_fw_mode == FW_MODE_POS) {
+                g_fw_header_pending = true;
+                g_fw_last_tick = 0u;
+            }
+            printf("ACK,TUNEPOS,axis=%u,target_pos=%.3f\r\n", axis, target_pos);
+        } else {
+            printf("ERR,TUNEPOS\r\n");
+        }
+    } else if (strcmp(cmd, "TUNESTOP") == 0) {
+        ControlMgr_StopTune();
+        printf("ACK,TUNESTOP\r\n");
+    } else if (strncmp(cmd, "FWVEL,ON,", 9) == 0) {
+        unsigned int period_ms;
+        if (sscanf(cmd + 9, "%u", &period_ms) == 1) {
+            fw_enable(FW_MODE_VEL, (uint16_t)period_ms);
+            printf("ACK,FWVEL,ON,%u\r\n", (unsigned)g_fw_period_ms);
+        } else {
+            printf("ERR,FWVEL\r\n");
+        }
+    } else if (strncmp(cmd, "FWPOS,ON,", 9) == 0) {
+        unsigned int period_ms;
+        if (sscanf(cmd + 9, "%u", &period_ms) == 1) {
+            fw_enable(FW_MODE_POS, (uint16_t)period_ms);
+            printf("ACK,FWPOS,ON,%u\r\n", (unsigned)g_fw_period_ms);
+        } else {
+            printf("ERR,FWPOS\r\n");
+        }
+    } else if (strcmp(cmd, "FWOFF") == 0) {
+        fw_disable();
+        printf("ACK,FWOFF\r\n");
     } else if (strncmp(cmd, "SETPOS1,", 8) == 0) {
         ControlMgr_SetTargetPosAxis(0u, (float)atof(cmd + 8));
         printf("ACK,SETPOS1\r\n");

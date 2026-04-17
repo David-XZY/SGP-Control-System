@@ -7,6 +7,8 @@
 #include "tim.h"
 #include <stdio.h>
 
+#define CTRL_TICK_DT_S 0.01f
+
 typedef struct {
     TIM_HandleTypeDef *tim; /* 该轴 PWM 定时器 */
     uint32_t channel;       /* 该轴 PWM 通道 */
@@ -32,6 +34,14 @@ static const AxisHwMap_t g_axis_hw[CTRL_AXIS_NUM] = {
 static SystemMode_e g_mode = SYS_BOOT;
 /* 状态打印节流时间戳（ms） */
 static uint32_t g_last_print_tick = 0u;
+/* 各轴回零后对应的物理长度（mm，来自测试数据“初始时实际长度”） */
+static const float g_zero_len_mm[CTRL_AXIS_NUM] = {30.0f, 32.0f, 31.0f, 30.0f, 30.0f, 29.5f};
+/* 回零完成后的统一目标物理长度（mm） */
+#define UNIFIED_START_LEN_MM 40.0f
+/* 单轴调参上下文 */
+static uint8_t g_tune_axis = 0u;
+static float g_tune_target_vel = 0.0f;
+static float g_tune_target_pos = 0.0f;
 
 /* 将每轴命令经过安全门控后写入硬件 */
 static void apply_outputs_with_safety_gate(void) {
@@ -95,15 +105,40 @@ void ControlMgr_Tick10ms(void) {
         }
         break;
 
+    case SYS_TUNE_VEL:
+        for (i = 0; i < CTRL_AXIS_NUM; i++) {
+            if (i == g_tune_axis) {
+                acts[i].target_vel = g_tune_target_vel;
+                acts[i].target_pos += (g_tune_target_vel * CTRL_TICK_DT_S);
+                Actuator_VelocityControl(&acts[i]);
+            } else {
+                Actuator_SetBrakeCommand(&acts[i]);
+            }
+        }
+        break;
+
+    case SYS_TUNE_POS:
+        for (i = 0; i < CTRL_AXIS_NUM; i++) {
+            if (i == g_tune_axis) {
+                acts[i].target_pos = g_tune_target_pos;
+                Actuator_PositionControl(&acts[i]);
+                Actuator_VelocityControl(&acts[i]);
+            } else {
+                Actuator_SetBrakeCommand(&acts[i]);
+            }
+        }
+        break;
+
     case SYS_HOMING:
         Homing_Tick10ms(acts);
         if (Homing_IsFailed()) {
             g_mode = SYS_FAULT;
         } else if (Homing_IsDone()) {
             for (i = 0; i < CTRL_AXIS_NUM; i++) {
-                acts[i].target_pos = 0.0f;
+                /* 统一到 4cm：目标位移 = 40mm - 各轴回零物理长度 */
+                acts[i].target_pos = UNIFIED_START_LEN_MM - g_zero_len_mm[i];
             }
-            g_mode = SYS_IDLE;
+            g_mode = SYS_RUN_CLOSED_LOOP;
         }
         break;
 
@@ -140,7 +175,8 @@ void ControlMgr_SetRunMode(void) {
     if (Safety_IsEstopLatched()) {
         return;
     }
-    if ((g_mode == SYS_IDLE) || (g_mode == SYS_RUN_CLOSED_LOOP) || (g_mode == SYS_MANUAL_TEST)) {
+    if ((g_mode == SYS_IDLE) || (g_mode == SYS_RUN_CLOSED_LOOP) || (g_mode == SYS_MANUAL_TEST) ||
+        (g_mode == SYS_TUNE_VEL) || (g_mode == SYS_TUNE_POS)) {
         g_mode = SYS_RUN_CLOSED_LOOP;
     }
 }
@@ -150,8 +186,8 @@ void ControlMgr_SetIdleMode(void) {
     if (Safety_IsEstopLatched()) {
         return;
     }
-    if ((g_mode == SYS_RUN_CLOSED_LOOP) || (g_mode == SYS_HOMING) || (g_mode == SYS_IDLE) ||
-        (g_mode == SYS_MANUAL_TEST)) {
+    if ((g_mode == SYS_RUN_CLOSED_LOOP) || (g_mode == SYS_HOMING) || (g_mode == SYS_IDLE) || (g_mode == SYS_MANUAL_TEST) ||
+        (g_mode == SYS_TUNE_VEL) || (g_mode == SYS_TUNE_POS)) {
         g_mode = SYS_IDLE;
     }
 }
@@ -246,6 +282,58 @@ void ControlMgr_ManualSetAxisOutput(uint8_t axis, uint8_t in1, uint8_t in2, uint
 void ControlMgr_ManualBrakeAll(void) {
     set_all_brake_commands();
 }
+
+/* 进入单轴速度环调参模式 */
+void ControlMgr_StartTuneVel(uint8_t axis, float target_vel) {
+    if ((axis >= CTRL_AXIS_NUM) || Safety_IsEstopLatched()) {
+        return;
+    }
+
+    g_tune_axis = axis;
+    g_tune_target_vel = target_vel;
+    g_tune_target_pos = acts[axis].current_pos;
+    acts[axis].target_pos = acts[axis].current_pos;
+    acts[axis].target_vel = 0.0f;
+    acts[axis].integral_vel = 0.0f;
+    acts[axis].last_vel_error = 0.0f;
+    acts[axis].d_term_filt = 0.0f;
+    set_all_brake_commands();
+    g_mode = SYS_TUNE_VEL;
+}
+
+/* 进入单轴位置环调参模式 */
+void ControlMgr_StartTunePos(uint8_t axis, float target_pos) {
+    if ((axis >= CTRL_AXIS_NUM) || Safety_IsEstopLatched()) {
+        return;
+    }
+    if (target_pos < 0.0f) {
+        target_pos = 0.0f;
+    }
+    if (target_pos > 300.0f) {
+        target_pos = 300.0f;
+    }
+
+    g_tune_axis = axis;
+    g_tune_target_pos = target_pos;
+    g_tune_target_vel = 0.0f;
+    acts[axis].target_pos = target_pos;
+    acts[axis].integral_vel = 0.0f;
+    acts[axis].last_vel_error = 0.0f;
+    acts[axis].d_term_filt = 0.0f;
+    set_all_brake_commands();
+    g_mode = SYS_TUNE_POS;
+}
+
+/* 停止单轴调参模式并刹车 */
+void ControlMgr_StopTune(void) {
+    set_all_brake_commands();
+    if (g_mode == SYS_TUNE_VEL || g_mode == SYS_TUNE_POS) {
+        g_mode = SYS_IDLE;
+    }
+}
+
+/* 获取当前调参轴（0~5） */
+uint8_t ControlMgr_GetTuneAxis(void) { return g_tune_axis; }
 
 /* 读取当前系统模式 */
 SystemMode_e ControlMgr_GetMode(void) { return g_mode; }
