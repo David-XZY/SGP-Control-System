@@ -37,8 +37,10 @@ static int parse_six_floats(const char *s, float out[6]) {
 
 /* 打印单轴当前 PID 参数 */
 static void print_axis_pid(uint8_t axis) {
-    printf("PIDCFG,axis=%u,kp_pos=%.4f,kp_vel=%.4f,ki_vel=%.4f,kd_vel=%.4f,vel_limit=%.4f\r\n", (unsigned)(axis + 1u),
-           acts[axis].kp_pos, acts[axis].kp_vel, acts[axis].ki_vel, acts[axis].kd_vel, acts[axis].vel_limit);
+    printf(
+        "PIDCFG,axis=%u,kp_pos=%.4f,kp_vel=%.4f,ki_vel=%.4f,kd_vel=%.4f,vel_limit=%.4f,ff_bias=%.2f,ff_gain=%.3f\r\n",
+        (unsigned)(axis + 1u), acts[axis].kp_pos, acts[axis].kp_vel, acts[axis].ki_vel, acts[axis].kd_vel,
+        acts[axis].vel_limit, acts[axis].ff_bias_pwm, acts[axis].ff_gain_pwm_per_vel);
 }
 
 /* 参数改动后重置速度环内部状态 */
@@ -90,7 +92,7 @@ static void fw_stream_tick(void) {
 
     if (g_fw_header_pending) {
         if (g_fw_mode == FW_MODE_VEL) {
-            printf("target_cnt,actual_cnt,target_vel,actual_vel\r\n");
+            printf("target_cnt,actual_cnt,target_vel,actual_vel,ff_pwm,pid_u,output_pwm\r\n");
         } else {
             printf("target_vel,actual_vel,target_pos,actual_pos\r\n");
         }
@@ -100,7 +102,8 @@ static void fw_stream_tick(void) {
     if (g_fw_mode == FW_MODE_VEL) {
         float target_cnt = Encoder_PosMmToCount(axis, acts[axis].target_pos);
         int16_t actual_cnt = Encoder_GetRawCount(axis);
-        printf("%.3f,%d,%.3f,%.3f\r\n", target_cnt, (int)actual_cnt, acts[axis].target_vel, acts[axis].current_vel);
+        printf("%.3f,%d,%.3f,%.3f,%.3f,%.3f,%u\r\n", target_cnt, (int)actual_cnt, acts[axis].target_vel,
+               acts[axis].current_vel, acts[axis].dbg_u_ff, acts[axis].dbg_u_pid, (unsigned)acts[axis].cmd_pwm);
     } else {
         printf("%.3f,%.3f,%.3f,%.3f\r\n", acts[axis].target_vel, acts[axis].current_vel, acts[axis].target_pos,
                acts[axis].current_pos);
@@ -368,6 +371,37 @@ void UART_ProcessCommand(void) {
             print_axis_pid((uint8_t)(axis - 1u));
         } else {
             printf("ERR,VLIM\r\n");
+        }
+    } else if (strncmp(cmd, "FFBIAS,", 7) == 0) {
+        unsigned int axis;
+        float value;
+        if (sscanf(cmd + 7, "%u,%f", &axis, &value) == 2 && axis >= 1u && axis <= 6u && value >= 0.0f &&
+            value <= PWM_MAX) {
+            acts[axis - 1u].ff_bias_pwm = value;
+            print_axis_pid((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,FFBIAS\r\n");
+        }
+    } else if (strncmp(cmd, "FFGAIN,", 7) == 0) {
+        unsigned int axis;
+        float value;
+        if (sscanf(cmd + 7, "%u,%f", &axis, &value) == 2 && axis >= 1u && axis <= 6u && value >= 0.0f) {
+            acts[axis - 1u].ff_gain_pwm_per_vel = value;
+            print_axis_pid((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,FFGAIN\r\n");
+        }
+    } else if (strncmp(cmd, "FF,", 3) == 0) {
+        unsigned int axis;
+        float bias;
+        float gain;
+        if (sscanf(cmd + 3, "%u,%f,%f", &axis, &bias, &gain) == 3 && axis >= 1u && axis <= 6u && bias >= 0.0f &&
+            bias <= PWM_MAX && gain >= 0.0f) {
+            acts[axis - 1u].ff_bias_pwm = bias;
+            acts[axis - 1u].ff_gain_pwm_per_vel = gain;
+            print_axis_pid((uint8_t)(axis - 1u));
+        } else {
+            printf("ERR,FF\r\n");
         }
     } else if (strncmp(cmd, "SHOWPID,", 8) == 0) {
         unsigned int axis;
