@@ -5,6 +5,12 @@
 
 /* 控制周期（秒），与 TIM6 的 10ms 中断一致 */
 #define CONTROL_DT_S 0.01f
+/* 速度前馈死区偏置（PWM） */
+#define FF_BIAS_PWM_DEFAULT 1300.0f
+/* 速度前馈增益：满速 40mm/s 对应 PWM_MAX（线性近似） */
+#define FF_GAIN_DEFAULT ((PWM_MAX - FF_BIAS_PWM_DEFAULT) / 40.0f)
+/* 速度接近 0 时的静止判定阈值（mm/s） */
+#define FF_VEL_EPSILON 0.02f
 
 /* 初始化执行器对象并绑定硬件资源 */
 void Actuator_Init(Actuator_t *act, TIM_HandleTypeDef *htim, uint32_t ch,
@@ -37,6 +43,11 @@ void Actuator_Init(Actuator_t *act, TIM_HandleTypeDef *htim, uint32_t ch,
     act->integral_vel = 0.0f;
     act->last_vel_error = 0.0f;
     act->d_term_filt = 0.0f;
+    act->ff_bias_pwm = FF_BIAS_PWM_DEFAULT;
+    act->ff_gain_pwm_per_vel = FF_GAIN_DEFAULT;
+    act->dbg_u_pid = 0.0f;
+    act->dbg_u_ff = 0.0f;
+    act->dbg_u_total = 0.0f;
 
     act->cmd_in1 = 0u;
     act->cmd_in2 = 0u;
@@ -91,8 +102,11 @@ void Actuator_VelocityControl(Actuator_t *act) {
     float i_term;
     float d_term_raw;
     float d_term;
-    float control_u;
-    float abs_u;
+    float u_pid;
+    float u_ff;
+    float u_total;
+    float abs_total;
+    float tgt_vel_abs;
 
     vel_error = act->target_vel - act->current_vel;
 
@@ -113,10 +127,28 @@ void Actuator_VelocityControl(Actuator_t *act) {
     act->d_term_filt = (act->d_term_filt * 0.8f) + (d_term_raw * 0.2f);
     d_term = act->d_term_filt * act->kd_vel;
 
-    control_u = p_term + i_term + d_term;
+    u_pid = p_term + i_term + d_term;
 
-    if (fabsf(control_u) > 100.0f) {
-        if (control_u > 0.0f) {
+    tgt_vel_abs = fabsf(act->target_vel);
+    if (tgt_vel_abs < FF_VEL_EPSILON) {
+        u_ff = 0.0f;
+    } else {
+        u_ff = act->ff_bias_pwm + (act->ff_gain_pwm_per_vel * tgt_vel_abs);
+        if (u_ff > PWM_MAX) {
+            u_ff = PWM_MAX;
+        }
+        if (act->target_vel < 0.0f) {
+            u_ff = -u_ff;
+        }
+    }
+
+    u_total = u_ff + u_pid;
+    act->dbg_u_pid = u_pid;
+    act->dbg_u_ff = u_ff;
+    act->dbg_u_total = u_total;
+
+    if (fabsf(u_total) > 1.0f) {
+        if (u_total > 0.0f) {
             act->cmd_in1 = 1u;
             act->cmd_in2 = 0u;
         } else {
@@ -124,11 +156,11 @@ void Actuator_VelocityControl(Actuator_t *act) {
             act->cmd_in2 = 1u;
         }
 
-        abs_u = fabsf(control_u);
-        if (abs_u > (PWM_MAX - PWM_MIN)) {
-            abs_u = (PWM_MAX - PWM_MIN);
+        abs_total = fabsf(u_total);
+        if (abs_total > PWM_MAX) {
+            abs_total = PWM_MAX;
         }
-        act->cmd_pwm = (uint16_t)(PWM_MIN + abs_u);
+        act->cmd_pwm = (uint16_t)(abs_total);
     } else {
         Actuator_SetBrakeCommand(act);
     }

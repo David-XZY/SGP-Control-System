@@ -3,8 +3,6 @@
 
 #include "main.h"
 
-/* PWM 最小有效输出，对应电机克服静摩擦所需占空比下限 */
-#define PWM_MIN 1200.0f
 /* PWM 最大输出（与当前定时器 ARR=4199 对齐，预留 1 个计数） */
 #define PWM_MAX 4198.0f
 /* 速度滑动平均窗口长度（用于抑制编码器速度抖动） */
@@ -39,6 +37,13 @@ typedef struct {
     float kd_vel;                  /* 速度环 D */
     float last_vel_error;          /* 上一周期速度误差 */
     float d_term_filt;             /* D 项低通滤波状态 */
+    float ff_bias_pwm;             /* 速度前馈偏置（克服死区） */
+    float ff_gain_pwm_per_vel;     /* 速度前馈增益（PWM / (mm/s)） */
+
+    /* --- 调试观测量（便于 FireWater 输出） --- */
+    float dbg_u_pid;               /* PID 输出（有符号，PWM 等效量） */
+    float dbg_u_ff;                /* 前馈输出（有符号，PWM 等效量） */
+    float dbg_u_total;             /* 前馈+PID 合成输出（有符号） */
 
     /* --- 输出命令缓存（先计算，再统一写硬件） --- */
     uint8_t cmd_in1;               /* 方向命令 IN1（0/1） */
