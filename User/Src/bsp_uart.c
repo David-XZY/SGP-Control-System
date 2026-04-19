@@ -21,7 +21,8 @@ volatile uint8_t new_cmd_flag = 0u;
 typedef enum {
     FW_MODE_OFF = 0,
     FW_MODE_VEL,
-    FW_MODE_POS
+    FW_MODE_POS,
+    FW_MODE_SYNC
 } FireWaterMode_e;
 
 static FireWaterMode_e g_fw_mode = FW_MODE_OFF;
@@ -75,12 +76,13 @@ static void fw_stream_tick(void) {
     }
 
     mode = ControlMgr_GetMode();
-    if (((g_fw_mode == FW_MODE_VEL) && (mode != SYS_TUNE_VEL)) || ((g_fw_mode == FW_MODE_POS) && (mode != SYS_TUNE_POS))) {
+    if (((g_fw_mode == FW_MODE_VEL) && (mode != SYS_TUNE_VEL)) || ((g_fw_mode == FW_MODE_POS) && (mode != SYS_TUNE_POS)) ||
+        ((g_fw_mode == FW_MODE_SYNC) && !ControlMgr_IsSyncTestActive())) {
         return;
     }
 
     axis = g_fw_axis;
-    if (axis >= 6u) {
+    if ((g_fw_mode != FW_MODE_SYNC) && (axis >= 6u)) {
         return;
     }
 
@@ -93,8 +95,10 @@ static void fw_stream_tick(void) {
     if (g_fw_header_pending) {
         if (g_fw_mode == FW_MODE_VEL) {
             printf("target_cnt,actual_cnt,target_vel,actual_vel,ff_pwm,pid_u,output_pwm\r\n");
-        } else {
+        } else if (g_fw_mode == FW_MODE_POS) {
             printf("target_vel,actual_vel,target_pos,actual_pos\r\n");
+        } else {
+            printf("t_ms,stage,L_ref,L1,L2,L3,L4,L5,L6,V1,V2,V3,V4,V5,V6,Emax,Spread\r\n");
         }
         g_fw_header_pending = false;
     }
@@ -104,9 +108,16 @@ static void fw_stream_tick(void) {
         int16_t actual_cnt = Encoder_GetRawCount(axis);
         printf("%.3f,%d,%.3f,%.3f,%.3f,%.3f,%u\r\n", target_cnt, (int)actual_cnt, acts[axis].target_vel,
                acts[axis].current_vel, acts[axis].dbg_u_ff, acts[axis].dbg_u_pid, (unsigned)acts[axis].cmd_pwm);
-    } else {
+    } else if (g_fw_mode == FW_MODE_POS) {
         printf("%.3f,%.3f,%.3f,%.3f\r\n", acts[axis].target_vel, acts[axis].current_vel, acts[axis].target_pos,
                acts[axis].current_pos);
+    } else {
+        printf("%lu,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\r\n",
+               (unsigned long)now, (unsigned)ControlMgr_GetSyncState(), ControlMgr_GetSyncRefLen(),
+               ControlMgr_GetAxisLenMm(0u), ControlMgr_GetAxisLenMm(1u), ControlMgr_GetAxisLenMm(2u),
+               ControlMgr_GetAxisLenMm(3u), ControlMgr_GetAxisLenMm(4u), ControlMgr_GetAxisLenMm(5u),
+               acts[0].current_vel, acts[1].current_vel, acts[2].current_vel, acts[3].current_vel, acts[4].current_vel,
+               acts[5].current_vel, ControlMgr_GetSyncMaxErr(), ControlMgr_GetSyncSpread());
     }
 }
 
@@ -442,6 +453,58 @@ void UART_ProcessCommand(void) {
     } else if (strcmp(cmd, "TUNESTOP") == 0) {
         ControlMgr_StopTune();
         printf("ACK,TUNESTOP\r\n");
+    } else if (strcmp(cmd, "SYNC,HOME40") == 0) {
+        if (ControlMgr_StartSyncHome40()) {
+            if (g_fw_mode == FW_MODE_SYNC) {
+                g_fw_header_pending = true;
+                g_fw_last_tick = 0u;
+            }
+            printf("ACK,SYNC,HOME40\r\n");
+        } else {
+            printf("ERR,SYNC_HOME40\r\n");
+        }
+    } else if (strncmp(cmd, "SYNC,EXT,", 9) == 0) {
+        float start_len;
+        float end_len;
+        float speed;
+        if (sscanf(cmd + 9, "%f,%f,%f", &start_len, &end_len, &speed) == 3) {
+            if (ControlMgr_StartSyncExtend(start_len, end_len, speed)) {
+                if (g_fw_mode == FW_MODE_SYNC) {
+                    g_fw_header_pending = true;
+                    g_fw_last_tick = 0u;
+                }
+                printf("ACK,SYNC,EXT,start=%.3f,end=%.3f,speed=%.3f\r\n", start_len, end_len, speed);
+            } else {
+                printf("ERR,SYNC_EXT,range=0..290,speed=0..40,end_gt_start\r\n");
+            }
+        } else {
+            printf("ERR,SYNC_EXT\r\n");
+        }
+    } else if (strncmp(cmd, "SYNC,SINE,", 10) == 0) {
+        float center;
+        float amp;
+        float freq;
+        float cycles;
+        if (sscanf(cmd + 10, "%f,%f,%f,%f", &center, &amp, &freq, &cycles) == 4) {
+            if (ControlMgr_StartSyncSine(center, amp, freq, cycles)) {
+                if (g_fw_mode == FW_MODE_SYNC) {
+                    g_fw_header_pending = true;
+                    g_fw_last_tick = 0u;
+                }
+                printf("ACK,SYNC,SINE,center=%.3f,amp=%.3f,freq=%.3f,cycles=%.3f\r\n", center, amp, freq, cycles);
+            } else {
+                printf("ERR,SYNC_SINE,range=0..290,max_ref_speed=40\r\n");
+            }
+        } else {
+            printf("ERR,SYNC_SINE\r\n");
+        }
+    } else if (strcmp(cmd, "SYNCSTOP") == 0) {
+        ControlMgr_StopSyncTest();
+        printf("ACK,SYNCSTOP\r\n");
+    } else if (strcmp(cmd, "SYNCSTATUS") == 0) {
+        printf("ACK,SYNCSTATUS,mode=%d,state=%u,ref=%.3f,err=%.3f,spread=%.3f\r\n", (int)ControlMgr_GetMode(),
+               (unsigned)ControlMgr_GetSyncState(), ControlMgr_GetSyncRefLen(), ControlMgr_GetSyncMaxErr(),
+               ControlMgr_GetSyncSpread());
     } else if (strncmp(cmd, "FWVEL,ON,", 9) == 0) {
         unsigned int period_ms;
         if (sscanf(cmd + 9, "%u", &period_ms) == 1) {
@@ -457,6 +520,14 @@ void UART_ProcessCommand(void) {
             printf("ACK,FWPOS,ON,%u\r\n", (unsigned)g_fw_period_ms);
         } else {
             printf("ERR,FWPOS\r\n");
+        }
+    } else if (strncmp(cmd, "FWSYNC,ON,", 10) == 0) {
+        unsigned int period_ms;
+        if (sscanf(cmd + 10, "%u", &period_ms) == 1) {
+            fw_enable(FW_MODE_SYNC, (uint16_t)period_ms);
+            printf("ACK,FWSYNC,ON,%u\r\n", (unsigned)g_fw_period_ms);
+        } else {
+            printf("ERR,FWSYNC\r\n");
         }
     } else if (strcmp(cmd, "FWOFF") == 0) {
         fw_disable();

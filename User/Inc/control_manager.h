@@ -16,6 +16,7 @@ typedef enum {
     SYS_MANUAL_TEST,       /* 手动测试输出 */
     SYS_TUNE_VEL,          /* 单轴速度环调参 */
     SYS_TUNE_POS,          /* 单轴位置环调参 */
+    SYS_SYNC_TEST,         /* 6 轴同步控制测试 */
     SYS_ESTOP_LATCHED,     /* 急停锁存 */
     SYS_FAULT              /* 故障 */
 } SystemMode_e;
@@ -121,6 +122,16 @@ void ControlMgr_StartTuneVel(uint8_t axis, float target_vel);
 void ControlMgr_StartTunePos(uint8_t axis, float target_pos);
 void ControlMgr_StopTune(void);
 uint8_t ControlMgr_GetTuneAxis(void);
+bool ControlMgr_StartSyncHome40(void);
+bool ControlMgr_StartSyncExtend(float start_len, float end_len, float speed);
+bool ControlMgr_StartSyncSine(float center, float amp, float freq, float cycles);
+void ControlMgr_StopSyncTest(void);
+bool ControlMgr_IsSyncTestActive(void);
+uint8_t ControlMgr_GetSyncState(void);
+float ControlMgr_GetSyncRefLen(void);
+float ControlMgr_GetSyncMaxErr(void);
+float ControlMgr_GetSyncSpread(void);
+float ControlMgr_GetAxisLenMm(uint8_t axis);
 
 /**
  * @brief 获取当前系统模式
