@@ -555,6 +555,16 @@
               <FileType>1</FileType>
               <FilePath>..\User\Src\safety_manager.c</FilePath>
             </File>
+            <File>
+              <FileName>hwt901b.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\Src\hwt901b.c</FilePath>
+            </File>
+            <File>
+              <FileName>wit_c_sdk.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\User\Src\wit_c_sdk.c</FilePath>
+            </File>
           </Files>
         </Group>
       </Groups>

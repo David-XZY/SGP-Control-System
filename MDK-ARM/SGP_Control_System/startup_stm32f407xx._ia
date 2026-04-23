@@ -1,0 +1,3 @@
+--cpu Cortex-M4.fp.sp -g --apcs=interwork --pd "__MICROLIB SETA 1"
+--pd "__UVISION_VERSION SETA 542" --pd "STM32F407xx SETA 1"
+--list startup_stm32f407xx.lst --xref -o sgp_control_system\startup_stm32f407xx.o --depend sgp_control_system\startup_stm32f407xx.d "startup_stm32f407xx.s"

@@ -3,6 +3,7 @@
 #include "control_manager.h"
 #include "encoder.h"
 #include "homing_manager.h"
+#include "hwt901b.h"
 #include "safety_manager.h"
 #include <stdbool.h>
 #include <stdio.h>
@@ -339,6 +340,8 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
         }
 
         HAL_UART_Receive_IT(&huart1, &rx_data, 1);
+    } else if (huart->Instance == USART2) {
+        HWT901B_RxCpltCallback(huart);
     }
 }
 
@@ -368,6 +371,34 @@ static void print_all_pid_data(void) {
     uint8_t i;
     for (i = 0u; i < CMD_AXIS_COUNT; i++) {
         print_axis_pid_data(i);
+    }
+}
+
+static void print_imu_data(void) {
+    HWT901B_Data_t imu;
+
+    HWT901B_GetData(&imu);
+    printf("DATA,IMU,online=%u,age=%lu,roll=%.3f,pitch=%.3f,yaw=%.3f,gx=%.3f,gy=%.3f,gz=%.3f,ax=%.3f,ay=%.3f,az=%.3f,temp=%.2f,mag=%d/%d/%d,flags=0x%X\r\n",
+           (unsigned)imu.online, (unsigned long)(HAL_GetTick() - imu.last_update_ms), imu.angle_deg[0],
+           imu.angle_deg[1], imu.angle_deg[2], imu.gyro_dps[0], imu.gyro_dps[1], imu.gyro_dps[2], imu.acc_g[0],
+           imu.acc_g[1], imu.acc_g[2], imu.temperature_c, (int)imu.mag[0], (int)imu.mag[1], (int)imu.mag[2],
+           (unsigned)imu.update_flags);
+}
+
+static void print_imu_status(void) {
+    HWT901B_Data_t imu;
+
+    HWT901B_GetData(&imu);
+    printf("DATA,IMU_STATUS,online=%u,last_ms=%lu,age=%lu,flags=0x%X\r\n", (unsigned)imu.online,
+           (unsigned long)imu.last_update_ms, (unsigned long)(HAL_GetTick() - imu.last_update_ms),
+           (unsigned)imu.update_flags);
+}
+
+static void print_imu_result(const char *op, int32_t ret) {
+    if (ret == 0) {
+        printf("OK,IMU,%s\r\n", op);
+    } else {
+        printf("ERR,IMU,%s,%ld\r\n", op, (long)ret);
     }
 }
 
@@ -414,6 +445,49 @@ static bool process_new_command(const char *cmd) {
     if (strcmp(cmd, "SYS STATUS?") == 0) {
         printf("DATA,STATUS,mode=%d,estop=%d,homed=%d\r\n", (int)ControlMgr_GetMode(),
                ControlMgr_IsEstopLatched() ? 1 : 0, ControlMgr_IsHomed() ? 1 : 0);
+        return true;
+    }
+
+    if (strcmp(cmd, "IMU STATUS?") == 0) {
+        print_imu_status();
+        return true;
+    }
+    if (strcmp(cmd, "IMU DATA?") == 0) {
+        print_imu_data();
+        return true;
+    }
+    if (strcmp(cmd, "IMU CFG BASIC") == 0) {
+        print_imu_result("CFG_BASIC", HWT901B_SetBasicOutput());
+        return true;
+    }
+    if (strncmp(cmd, "IMU RATE,", 9) == 0) {
+        unsigned int rate_hz;
+
+        if (sscanf(cmd + 9, "%u", &rate_hz) == 1) {
+            print_imu_result("RATE", HWT901B_SetOutputRateByHz((uint16_t)rate_hz));
+        } else {
+            printf("ERR,IMU,RATE_PARAM\r\n");
+        }
+        return true;
+    }
+    if (strcmp(cmd, "IMU SAVE") == 0) {
+        print_imu_result("SAVE", HWT901B_SaveConfig());
+        return true;
+    }
+    if (strcmp(cmd, "IMU READ ACC") == 0) {
+        print_imu_result("READ_ACC", HWT901B_ReadAccReg());
+        return true;
+    }
+    if (strcmp(cmd, "IMU CAL ACC") == 0) {
+        print_imu_result("CAL_ACC", HWT901B_StartAccCali());
+        return true;
+    }
+    if (strcmp(cmd, "IMU CAL MAG START") == 0) {
+        print_imu_result("CAL_MAG_START", HWT901B_StartMagCali());
+        return true;
+    }
+    if (strcmp(cmd, "IMU CAL MAG STOP") == 0) {
+        print_imu_result("CAL_MAG_STOP", HWT901B_StopMagCali());
         return true;
     }
 
